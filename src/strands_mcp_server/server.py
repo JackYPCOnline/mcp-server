@@ -1,3 +1,5 @@
+import ipaddress
+import urllib.parse
 from typing import Any, Dict, List
 
 from mcp.server.fastmcp import FastMCP
@@ -99,7 +101,7 @@ def fetch_doc(uri: str = "") -> Dict[str, Any]:
         - title: Document title
         - content: Full document text content
         - error: Error message (if fetch failed)
-        
+
         Or when uri is empty:
         - urls: List of all available document URLs with titles
 
@@ -109,15 +111,36 @@ def fetch_doc(uri: str = "") -> Dict[str, Any]:
     # If no URI provided, return all available URLs (llms.txt catalog)
     if not uri:
         url_titles = cache.get_url_titles()
-        return {
-            "urls": [
-                {"url": url, "title": title}
-                for url, title in url_titles.items()
-            ]
-        }
-
-    # Accept HTTP/HTTPS URLs
+        return {"urls": [{"url": url, "title": title} for url, title in url_titles.items()]}
+    # Validate url
     if uri.startswith("http://") or uri.startswith("https://"):
+        # Validate URL to prevent SSRF
+        try:
+            parsed = urllib.parse.urlparse(uri)
+            hostname = parsed.hostname
+
+            if not hostname:
+                return {"error": "invalid hostname", "url": uri}
+
+            # Block localhost and loopback addresses
+            if hostname.lower() in ["localhost", "127.0.0.1", "::1"]:
+                return {"error": "access to localhost not allowed", "url": uri}
+
+            # Block private IP ranges
+            try:
+                ip = ipaddress.ip_address(hostname)
+                if ip.is_private or ip.is_loopback or ip.is_link_local:
+                    return {"error": "access to private networks not allowed", "url": uri}
+            except ValueError:
+                pass
+
+            # Block common internal hostnames
+            internal_patterns = ["internal", "local", "corp", "intranet"]
+            if any(pattern in hostname.lower() for pattern in internal_patterns):
+                return {"error": "access to internal hostnames not allowed", "url": uri}
+
+        except Exception:
+            return {"error": "invalid url format", "url": uri}
         url = uri
     else:
         return {"error": "unsupported uri", "url": uri}
